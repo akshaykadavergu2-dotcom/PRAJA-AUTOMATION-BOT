@@ -984,6 +984,13 @@ export default function App() {
                     />
                   </div>
 
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
+                    <p className="font-semibold text-slate-400">OAuth Callback URLs (register these exactly in the X Developer Portal and Meta App settings)</p>
+                    <p className="text-slate-500">X: <span className="font-mono text-slate-200 break-all select-all">{settings.x_callback_url || ''}</span></p>
+                    <p className="text-slate-500">Facebook: <span className="font-mono text-slate-200 break-all select-all">{settings.fb_callback_url || ''}</span></p>
+                    <p className="text-slate-500">Client secrets are read from the X_CLIENT_SECRET and FB_CLIENT_SECRET environment variables.</p>
+                  </div>
+
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-2">Max Daily Posts Limit</label>
                     <input
