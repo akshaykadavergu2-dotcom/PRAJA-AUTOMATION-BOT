@@ -1,0 +1,8 @@
+{
+  "name": "Praja Sanketam Video Automation",
+  "description": "Automated X video monitoring, FFmpeg branding overlay, and Facebook Page publishing for Praja Sanketam.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
