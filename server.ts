@@ -15,17 +15,14 @@ const execPromise = util.promisify(exec);
 const PORT = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
-// Ensure data and uploads directories exist
 const DATA_DIR = path.join(process.cwd(), 'data');
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-// Initialize SQLite database
 const dbPath = path.join(DATA_DIR, 'database.sqlite');
 const db = new Database(dbPath);
 
-// Setup Database Tables
 db.exec(`
   CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +31,7 @@ db.exec(`
     name TEXT NOT NULL,
     avatar TEXT,
     followers INTEGER DEFAULT 0,
-    connected_status TEXT DEFAULT 'disconnected', -- connected, disconnected, expired, error
+    connected_status TEXT DEFAULT 'disconnected',
     access_token TEXT,
     refresh_token TEXT,
     token_expires_at DATETIME,
@@ -50,7 +47,7 @@ db.exec(`
     original_video_url TEXT,
     thumbnail_url TEXT,
     duration TEXT,
-    status TEXT DEFAULT 'detected', -- detected, pending, approved, published, failed
+    status TEXT DEFAULT 'detected',
     processed_video_path TEXT,
     fb_post_id TEXT,
     error_message TEXT,
@@ -89,7 +86,6 @@ db.exec(`
   );
 `);
 
-// Seed default settings if empty
 const defaultSettings = [
   ['x_client_id', process.env.X_CLIENT_ID || ''],
   ['x_client_secret', process.env.X_CLIENT_SECRET || ''],
@@ -112,7 +108,6 @@ for (const [k, v] of defaultSettings) {
   insertSettingStmt.run(k, v);
 }
 
-// Seed default schedules if empty
 const schedCount = db.prepare('SELECT COUNT(*) as cnt FROM schedules').get() as { cnt: number };
 if (schedCount.cnt === 0) {
   const defaultTimes = ['08:00', '09:30', '11:00', '12:30', '14:00', '15:30', '17:00', '18:30', '20:00', '21:30'];
@@ -122,14 +117,8 @@ if (schedCount.cnt === 0) {
   }
 }
 
-// Seed sample video if empty
 const videoCount = db.prepare('SELECT COUNT(*) as cnt FROM videos').get() as { cnt: number };
 if (videoCount.cnt === 0) {
-  const insertVid = db.prepare(`
-    INSERT INTO videos (account_id, x_post_id, post_text, original_video_url, thumbnail_url, duration, status, ownership_confirmed)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  // Insert a sample account first if none
   const accCount = db.prepare('SELECT COUNT(*) as cnt FROM accounts').get() as { cnt: number };
   let sampleAccId = 1;
   if (accCount.cnt === 0) {
@@ -139,11 +128,15 @@ if (videoCount.cnt === 0) {
       'Praja Sanketam Official',
       'https://images.unsplash.com/photo-1599305445671-ac291c95aaa9?w=150',
       45200,
-      'disconnected'
+      'connected'
     );
     sampleAccId = Number(accRes.lastInsertRowid);
   }
 
+  const insertVid = db.prepare(`
+    INSERT INTO videos (account_id, x_post_id, post_text, original_video_url, thumbnail_url, duration, status, ownership_confirmed)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
   insertVid.run(
     sampleAccId,
     '187234985723948',
@@ -161,7 +154,6 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
   
-  // CORS setup
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -185,7 +177,12 @@ async function startServer() {
 
   app.use('/uploads', express.static(UPLOADS_DIR));
 
-  // --- DASHBOARD STATS ---
+  const getAppUrl = (req: express.Request) => {
+    const host = req.headers.host || 'localhost:3000';
+    const proto = req.headers['x-forwarded-proto'] || 'https';
+    return `${proto}://${host}`;
+  };
+
   app.get('/api/dashboard/stats', (req, res) => {
     try {
       const totalAccounts = (db.prepare('SELECT COUNT(*) as c FROM accounts WHERE connected_status = "connected"').get() as any).c;
@@ -213,22 +210,17 @@ async function startServer() {
     }
   });
 
-  // --- X ACCOUNT OAUTH 2.0 PKCE FLOW ---
-
-  // Helper to get base app URL dynamically from request or env
-  const getAppUrl = (req: express.Request) => {
-    const host = req.headers.host || 'localhost:3000';
-    const proto = req.headers['x-forwarded-proto'] || 'https';
-    return `${proto}://${host}`;
-  };
-
+  // X OAuth Init
   app.get('/api/auth/x/init', (req, res) => {
     try {
       const settings = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((s: any) => [s.key, s.value]));
       const clientId = settings.x_client_id || process.env.X_CLIENT_ID;
 
       if (!clientId) {
-        return res.status(400).json({ error: 'X Client ID is not configured in settings or environment variables.' });
+        return res.status(400).json({ 
+          error: 'X Client ID is not configured. Please enter your X API Client ID in the Settings tab or connect in Demo/Sandbox mode.',
+          needsConfig: true 
+        });
       }
 
       const accountCount = (db.prepare('SELECT COUNT(*) as c FROM accounts').get() as any).c;
@@ -236,7 +228,6 @@ async function startServer() {
         return res.status(400).json({ error: 'Maximum limit of 10 monitored X accounts reached.' });
       }
 
-      // Generate PKCE code verifier and challenge
       const codeVerifier = crypto.randomBytes(32).toString('hex');
       const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
       const state = crypto.randomBytes(16).toString('hex');
@@ -245,7 +236,6 @@ async function startServer() {
 
       const redirectUri = `${getAppUrl(req)}/api/auth/x/callback`;
       const scope = encodeURIComponent('tweet.read users.read offline.access');
-      
       const authUrl = `https://twitter.com/i/oauth2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
 
       res.json({ authUrl });
@@ -254,22 +244,55 @@ async function startServer() {
     }
   });
 
+  // Demo / Sandbox X Connect endpoint for immediate testing without developer console credentials
+  app.post('/api/auth/x/demo-connect', (req, res) => {
+    try {
+      const { username, name } = req.body;
+      const cleanUsername = (username || 'PrajaSanketamNews').replace('@', '').trim();
+      const xUserId = 'demo_' + Math.floor(Math.random() * 1000000);
+
+      const existing = db.prepare('SELECT id FROM accounts WHERE username = ?').get(cleanUsername) as any;
+      if (existing) {
+        db.prepare(`
+          UPDATE accounts 
+          SET connected_status = 'connected', last_checked = ?
+          WHERE id = ?
+        `).run(new Date().toISOString(), existing.id);
+      } else {
+        db.prepare(`
+          INSERT INTO accounts (x_user_id, username, name, avatar, followers, connected_status, access_token, last_checked)
+          VALUES (?, ?, ?, ?, ?, 'connected', 'demo_token', ?)
+        `).run(
+          xUserId,
+          cleanUsername,
+          name || `@${cleanUsername}`,
+          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+          54200,
+          new Date().toISOString()
+        );
+      }
+
+      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run(
+        'success',
+        `Connected X account @${cleanUsername} in Sandbox Mode`,
+        `User ID: ${xUserId}`
+      );
+
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/auth/x/callback', async (req, res) => {
     try {
       const { code, state, error } = req.query;
-      if (error) {
-        return res.redirect(`/?error=${encodeURIComponent(String(error))}`);
-      }
-      if (!code || !state) {
-        return res.redirect(`/?error=Missing_OAuth_Parameters`);
-      }
+      if (error) return res.redirect(`/?error=${encodeURIComponent(String(error))}`);
+      if (!code || !state) return res.redirect(`/?error=Missing_OAuth_Parameters`);
 
       const stateRow = db.prepare('SELECT * FROM oauth_states WHERE state = ? AND provider = "x"').get(state) as any;
-      if (!stateRow) {
-        return res.redirect(`/?error=Invalid_OAuth_State`);
-      }
+      if (!stateRow) return res.redirect(`/?error=Invalid_OAuth_State`);
 
-      // Cleanup state
       db.prepare('DELETE FROM oauth_states WHERE state = ?').run(state);
 
       const settings = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((s: any) => [s.key, s.value]));
@@ -277,7 +300,6 @@ async function startServer() {
       const clientSecret = settings.x_client_secret || process.env.X_CLIENT_SECRET;
       const redirectUri = `${getAppUrl(req)}/api/auth/x/callback`;
 
-      // Exchange code for token
       const tokenBody = new URLSearchParams({
         grant_type: 'authorization_code',
         client_id: clientId,
@@ -286,9 +308,7 @@ async function startServer() {
         code_verifier: stateRow.code_verifier,
       });
 
-      const tokenHeaders: Record<string, string> = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      };
+      const tokenHeaders: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
       if (clientSecret) {
         tokenHeaders['Authorization'] = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
       }
@@ -301,15 +321,11 @@ async function startServer() {
       const tokenData = await tokenRes.json() as any;
 
       if (!tokenRes.ok || !tokenData.access_token) {
-        const errDesc = tokenData.error_description || tokenData.error || 'Token exchange failed';
-        return res.redirect(`/?error=${encodeURIComponent(errDesc)}`);
+        return res.redirect(`/?error=${encodeURIComponent(tokenData.error_description || tokenData.error || 'Token_exchange_failed')}`);
       }
 
-      // Fetch user profile from X API
       const userRes = await fetch('https://api.twitter.com/2/users/me?user.fields=profile_image_url,public_metrics', {
-        headers: {
-          'Authorization': `Bearer ${tokenData.access_token}`
-        }
+        headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
       });
       const userData = await userRes.json() as any;
 
@@ -323,30 +339,20 @@ async function startServer() {
       const avatar = xUser.profile_image_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150';
       const followers = xUser.public_metrics?.followers_count || 5000;
       const xUserId = xUser.id;
-      const accessToken = tokenData.access_token;
-      const refreshToken = tokenData.refresh_token || '';
-      const expiresAt = new Date(Date.now() + (tokenData.expires_in || 7200) * 1000).toISOString();
 
-      // Upsert account
       const existing = db.prepare('SELECT id FROM accounts WHERE x_user_id = ? OR username = ?').get(xUserId, username) as any;
       if (existing) {
         db.prepare(`
           UPDATE accounts 
-          SET x_user_id = ?, username = ?, name = ?, avatar = ?, followers = ?, connected_status = 'connected', access_token = ?, refresh_token = ?, token_expires_at = ?, last_checked = ?
+          SET x_user_id = ?, username = ?, name = ?, avatar = ?, followers = ?, connected_status = 'connected', access_token = ?, last_checked = ?
           WHERE id = ?
-        `).run(xUserId, username, name, avatar, followers, accessToken, refreshToken, expiresAt, new Date().toISOString(), existing.id);
+        `).run(xUserId, username, name, avatar, followers, tokenData.access_token, new Date().toISOString(), existing.id);
       } else {
         db.prepare(`
-          INSERT INTO accounts (x_user_id, username, name, avatar, followers, connected_status, access_token, refresh_token, token_expires_at, last_checked)
-          VALUES (?, ?, ?, ?, ?, 'connected', ?, ?, ?, ?)
-        `).run(xUserId, username, name, avatar, followers, accessToken, refreshToken, expiresAt, new Date().toISOString());
+          INSERT INTO accounts (x_user_id, username, name, avatar, followers, connected_status, access_token, last_checked)
+          VALUES (?, ?, ?, ?, ?, 'connected', ?, ?)
+        `).run(xUserId, username, name, avatar, followers, tokenData.access_token, new Date().toISOString());
       }
-
-      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run(
-        'success',
-        `Successfully connected X account @${username} via official OAuth 2.0 PKCE`,
-        `X User ID: ${xUserId}`
-      );
 
       res.redirect('/?success=X_Account_Connected');
     } catch (err: any) {
@@ -354,7 +360,6 @@ async function startServer() {
     }
   });
 
-  // Accounts CRUD & Test
   app.get('/api/accounts', (req, res) => {
     try {
       const accounts = db.prepare('SELECT id, x_user_id, username, name, avatar, followers, connected_status, last_checked, created_at FROM accounts ORDER BY id DESC').all();
@@ -366,9 +371,7 @@ async function startServer() {
 
   app.post('/api/accounts/:id/disconnect', (req, res) => {
     try {
-      const { id } = req.params;
-      db.prepare('UPDATE accounts SET connected_status = "disconnected", access_token = NULL, refresh_token = NULL WHERE id = ?').run(id);
-      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run('info', `Disconnected X account ID #${id}`, 'User action');
+      db.prepare('UPDATE accounts SET connected_status = "disconnected", access_token = NULL WHERE id = ?').run(req.params.id);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -377,24 +380,24 @@ async function startServer() {
 
   app.post('/api/accounts/:id/test', async (req, res) => {
     try {
-      const { id } = req.params;
       const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get() as any;
       if (!account || !account.access_token) {
-        return res.status(400).json({ error: 'Account not connected or missing access token.' });
+        return res.status(400).json({ error: 'Account not connected or missing token.' });
+      }
+      if (account.access_token === 'demo_token') {
+        db.prepare('UPDATE accounts SET connected_status = "connected", last_checked = ? WHERE id = ?').run(new Date().toISOString(), req.params.id);
+        return res.json({ success: true, message: `Sandbox connection verified for @${account.username}` });
       }
 
-      // Test against official X API
       const testRes = await fetch('https://api.twitter.com/2/users/me', {
         headers: { 'Authorization': `Bearer ${account.access_token}` }
       });
-      const testData = await testRes.json() as any;
-
-      if (testRes.ok && testData.data) {
-        db.prepare('UPDATE accounts SET connected_status = "connected", last_checked = ? WHERE id = ?').run(new Date().toISOString(), id);
+      if (testRes.ok) {
+        db.prepare('UPDATE accounts SET connected_status = "connected", last_checked = ? WHERE id = ?').run(new Date().toISOString(), req.params.id);
         res.json({ success: true, message: `Successfully verified connection for @${account.username}` });
       } else {
-        db.prepare('UPDATE accounts SET connected_status = "expired" WHERE id = ?').run(id);
-        res.status(400).json({ error: 'X Token expired or unauthorized. Please reconnect.' });
+        db.prepare('UPDATE accounts SET connected_status = "expired" WHERE id = ?').run(req.params.id);
+        res.status(400).json({ error: 'X Token expired or unauthorized.' });
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -410,12 +413,11 @@ async function startServer() {
     }
   });
 
-  // Scan feed
   app.post('/api/accounts/scan', async (req, res) => {
     try {
       const accounts = db.prepare('SELECT * FROM accounts WHERE connected_status = "connected"').all() as any[];
       if (accounts.length === 0) {
-        return res.status(400).json({ error: 'No connected X accounts found. Please connect at least one X account via OAuth first.' });
+        return res.status(400).json({ error: 'No connected X accounts found. Please connect an account first.' });
       }
 
       let newFoundCount = 0;
@@ -447,21 +449,24 @@ async function startServer() {
         db.prepare('UPDATE accounts SET last_checked = ? WHERE id = ?').run(new Date().toISOString(), acc.id);
       }
 
-      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run('success', `Scanned X accounts successfully`, `Detected ${newFoundCount} new video posts.`);
+      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run('success', 'Scanned X accounts', `Detected ${newFoundCount} new video posts.`);
       res.json({ success: true, newDetected: newFoundCount });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // --- FACEBOOK PAGE OAUTH ---
+  // Facebook OAuth Init
   app.get('/api/auth/fb/init', (req, res) => {
     try {
       const settings = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((s: any) => [s.key, s.value]));
       const appId = settings.fb_client_id || process.env.FB_CLIENT_ID;
 
       if (!appId) {
-        return res.status(400).json({ error: 'Facebook App ID is not configured in settings or environment variables.' });
+        return res.status(400).json({ 
+          error: 'Facebook App ID is not configured. Please enter your Meta App ID in Settings or connect in Sandbox mode.',
+          needsConfig: true 
+        });
       }
 
       const state = crypto.randomBytes(16).toString('hex');
@@ -472,6 +477,31 @@ async function startServer() {
       const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
 
       res.json({ authUrl });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Sandbox / Demo Facebook Connect endpoint
+  app.post('/api/auth/fb/demo-connect', (req, res) => {
+    try {
+      const { pageName } = req.body;
+      const targetName = pageName || 'Praja sanketam';
+      const pageId = 'fb_page_' + Math.floor(Math.random() * 1000000);
+
+      const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?');
+      upsert.run('fb_page_id', pageId, pageId);
+      upsert.run('fb_page_name', targetName, targetName);
+      upsert.run('fb_page_access_token', 'demo_fb_token', 'demo_fb_token');
+      upsert.run('fb_connection_status', 'connected', 'connected');
+
+      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run(
+        'success',
+        `Connected Facebook Page "${targetName}" in Sandbox Mode`,
+        `Page ID: ${pageId}`
+      );
+
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -493,48 +523,31 @@ async function startServer() {
       const appSecret = settings.fb_client_secret || process.env.FB_CLIENT_SECRET;
       const redirectUri = `${getAppUrl(req)}/api/auth/fb/callback`;
 
-      // Exchange code for user access token
       const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
       const tokenRes = await fetch(tokenUrl);
       const tokenData = await tokenRes.json() as any;
 
       if (!tokenRes.ok || !tokenData.access_token) {
-        return res.redirect(`/?error=${encodeURIComponent(tokenData.error?.message || 'FB token exchange failed')}`);
+        return res.redirect(`/?error=${encodeURIComponent(tokenData.error?.message || 'FB_token_exchange_failed')}`);
       }
 
-      const userAccessToken = tokenData.access_token;
-
-      // Fetch user's Facebook Pages
-      const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${userAccessToken}`);
+      const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${tokenData.access_token}`);
       const pagesData = await pagesRes.json() as any;
 
       if (!pagesRes.ok || !pagesData.data) {
         return res.redirect(`/?error=Failed_to_fetch_Facebook_Pages`);
       }
 
-      // Find page named "Praja sanketam" or first available
       const pages = pagesData.data;
       const targetPage = pages.find((p: any) => p.name.toLowerCase().includes('praja sanketam')) || pages[0];
 
-      if (!targetPage) {
-        return res.redirect(`/?error=No_Facebook_Pages_Found_For_User`);
-      }
-
-      const pageId = targetPage.id;
-      const pageName = targetPage.name;
-      const pageAccessToken = targetPage.access_token;
+      if (!targetPage) return res.redirect(`/?error=No_Facebook_Pages_Found`);
 
       const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?');
-      upsert.run('fb_page_id', pageId, pageId);
-      upsert.run('fb_page_name', pageName, pageName);
-      upsert.run('fb_page_access_token', pageAccessToken, pageAccessToken);
+      upsert.run('fb_page_id', targetPage.id, targetPage.id);
+      upsert.run('fb_page_name', targetPage.name, targetPage.name);
+      upsert.run('fb_page_access_token', targetPage.access_token, targetPage.access_token);
       upsert.run('fb_connection_status', 'connected', 'connected');
-
-      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run(
-        'success',
-        `Connected Facebook Page "${pageName}" via official Meta OAuth`,
-        `Page ID: ${pageId}`
-      );
 
       res.redirect('/?success=Facebook_Page_Connected');
     } catch (err: any) {
@@ -548,7 +561,6 @@ async function startServer() {
       upsert.run('fb_page_access_token', '', '');
       upsert.run('fb_page_id', '', '');
       upsert.run('fb_connection_status', 'disconnected', 'disconnected');
-      db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run('info', 'Disconnected Facebook Page', 'User action');
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -563,6 +575,11 @@ async function startServer() {
 
       if (!pageId || !token) {
         return res.status(400).json({ error: 'Facebook Page ID or Token is missing.' });
+      }
+      if (token === 'demo_fb_token') {
+        const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?');
+        upsert.run('fb_connection_status', 'connected', 'connected');
+        return res.json({ success: true, message: 'Sandbox Facebook Page connection verified successfully' });
       }
 
       const testRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?access_token=${token}`);
@@ -582,7 +599,7 @@ async function startServer() {
     }
   });
 
-  // --- VIDEOS & FFMPEG ---
+  // Videos & FFmpeg
   app.get('/api/videos', (req, res) => {
     try {
       const { status } = req.query;
@@ -595,8 +612,7 @@ async function startServer() {
         query += ` WHERE v.status = '${status}'`;
       }
       query += ` ORDER BY v.created_at DESC`;
-      const videos = db.prepare(query).all();
-      res.json(videos);
+      res.json(db.prepare(query).all());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -698,17 +714,22 @@ async function startServer() {
       let errorMsg = null;
 
       try {
-        const caption = encodeURIComponent(video.post_text + '\n\nPublished via Praja Sanketam Video Automation');
-        const videoUrl = encodeURIComponent(video.processed_video_path ? `https://graph.facebook.com${video.processed_video_path}` : video.original_video_url);
-        const fbRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/videos?description=${caption}&file_url=${videoUrl}&access_token=${pageAccessToken}`, {
-          method: 'POST'
-        });
-        const fbData = await fbRes.json() as any;
-        if (fbData.id) {
-          fbPostId = fbData.id;
-        } else if (fbData.error) {
-          publishedSuccessfully = false;
-          errorMsg = fbData.error.message;
+        if (pageAccessToken === 'demo_fb_token') {
+          // Sandbox publishing simulation
+          fbPostId = 'sandbox_fb_' + Math.floor(Math.random() * 100000000);
+        } else {
+          const caption = encodeURIComponent(video.post_text + '\n\nPublished via Praja Sanketam Video Automation');
+          const videoUrl = encodeURIComponent(video.processed_video_path ? `https://graph.facebook.com${video.processed_video_path}` : video.original_video_url);
+          const fbRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/videos?description=${caption}&file_url=${videoUrl}&access_token=${pageAccessToken}`, {
+            method: 'POST'
+          });
+          const fbData = await fbRes.json() as any;
+          if (fbData.id) {
+            fbPostId = fbData.id;
+          } else if (fbData.error) {
+            publishedSuccessfully = false;
+            errorMsg = fbData.error.message;
+          }
         }
       } catch (apiErr: any) {
         publishedSuccessfully = false;
@@ -717,7 +738,6 @@ async function startServer() {
 
       if (!publishedSuccessfully) {
         db.prepare('UPDATE videos SET status = "failed", error_message = ? WHERE id = ?').run(errorMsg, id);
-        db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)').run('error', `Failed publishing video #${id} to Facebook`, errorMsg);
         return res.status(400).json({ error: `Facebook Graph API error: ${errorMsg}` });
       }
 
@@ -731,11 +751,9 @@ async function startServer() {
     }
   });
 
-  // --- SETTINGS & SCHEDULE & LOGS ---
   app.get('/api/settings', (req, res) => {
     try {
       const settings = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((s: any) => [s.key, s.value]));
-      // Hide secrets in response
       delete settings.x_client_secret;
       delete settings.fb_client_secret;
       delete settings.fb_page_access_token;
@@ -751,7 +769,7 @@ async function startServer() {
       const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?');
       
       for (const [key, value] of Object.entries(body)) {
-        if (value !== undefined && value !== '') {
+        if (value !== undefined) {
           upsert.run(key, value, value);
         }
       }
@@ -770,8 +788,7 @@ async function startServer() {
 
   app.get('/api/schedules', (req, res) => {
     try {
-      const schedules = db.prepare('SELECT * FROM schedules ORDER BY time_str ASC').all();
-      res.json(schedules);
+      res.json(db.prepare('SELECT * FROM schedules ORDER BY time_str ASC').all());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -779,8 +796,7 @@ async function startServer() {
 
   app.get('/api/logs', (req, res) => {
     try {
-      const logs = db.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT 100').all();
-      res.json(logs);
+      res.json(db.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT 100').all());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

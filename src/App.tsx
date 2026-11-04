@@ -16,8 +16,8 @@ import {
   Sliders, 
   FileText, 
   ChevronRight,
-  ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  Zap
 } from 'lucide-react';
 
 interface Account {
@@ -27,7 +27,7 @@ interface Account {
   name: string;
   avatar: string;
   followers: number;
-  connected_status: string; // connected, disconnected, expired, error
+  connected_status: string;
   last_checked: string;
 }
 
@@ -102,11 +102,12 @@ export default function App() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Selected video for approval
   const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
   const [ownershipConfirmed, setOwnershipConfirmed] = useState(false);
 
-  // Parse URL query params for OAuth success/error feedback
+  // Demo connect form state
+  const [demoUsername, setDemoUsername] = useState('PrajaSanketamNews');
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const succ = params.get('success');
@@ -149,7 +150,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // X OAuth Init
   const handleConnectX = async () => {
     try {
       setErrorMsg('');
@@ -158,7 +158,31 @@ export default function App() {
       if (res.ok && data.authUrl) {
         window.location.href = data.authUrl;
       } else {
-        setErrorMsg(data.error || 'Failed to initialize X OAuth');
+        if (data.needsConfig) {
+          setErrorMsg(`${data.error} You can also use Sandbox Connect below for instant testing.`);
+        } else {
+          setErrorMsg(data.error || 'Failed to initialize X OAuth');
+        }
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    }
+  };
+
+  const handleDemoConnectX = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/auth/x/demo-connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: demoUsername })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSuccessMsg(`Successfully connected X account @${demoUsername} in Sandbox Mode.`);
+        loadData();
+      } else {
+        setErrorMsg(data.error);
       }
     } catch (err: any) {
       setErrorMsg(err.message);
@@ -205,7 +229,6 @@ export default function App() {
     }
   };
 
-  // Facebook OAuth Init
   const handleConnectFacebook = async () => {
     try {
       setErrorMsg('');
@@ -214,7 +237,30 @@ export default function App() {
       if (res.ok && data.authUrl) {
         window.location.href = data.authUrl;
       } else {
-        setErrorMsg(data.error || 'Failed to initialize Facebook OAuth');
+        if (data.needsConfig) {
+          setErrorMsg(`${data.error} You can also use Sandbox Connect below for instant testing.`);
+        } else {
+          setErrorMsg(data.error || 'Failed to initialize Facebook OAuth');
+        }
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    }
+  };
+
+  const handleDemoConnectFacebook = async () => {
+    try {
+      const res = await fetch('/api/auth/fb/demo-connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pageName: 'Praja sanketam' })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSuccessMsg('Successfully connected Facebook Page "Praja sanketam" in Sandbox Mode.');
+        loadData();
+      } else {
+        setErrorMsg(data.error);
       }
     } catch (err: any) {
       setErrorMsg(err.message);
@@ -262,7 +308,7 @@ export default function App() {
         setSuccessMsg(`Scan complete! Detected ${data.newDetected} new video posts from connected X accounts.`);
         loadData();
       } else {
-        setErrorMsg(data.error || 'Failed to scan X accounts');
+        setErrorMsg(data.error || 'Failed to scan X accounts. Please connect an X account first.');
       }
     } catch (err: any) {
       setErrorMsg(err.message);
@@ -344,7 +390,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       
-      {/* Top Banner / Header */}
+      {/* Header */}
       <header className="bg-blue-950 border-b border-blue-900 sticky top-0 z-40 shadow-xl">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center space-x-3">
@@ -371,7 +417,7 @@ export default function App() {
             </button>
             <div className="hidden sm:flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 text-xs text-slate-300">
               <span className={`w-2.5 h-2.5 rounded-full ${stats.connectedAccounts > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
-              <span>{stats.connectedAccounts > 0 ? 'X & FB OAuth Active' : 'OAuth Credentials Required'}</span>
+              <span>{stats.connectedAccounts > 0 ? 'X & FB Connected' : 'Accounts Disconnected'}</span>
             </div>
           </div>
         </div>
@@ -412,7 +458,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Container */}
+      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8 flex-1 w-full">
         {successMsg && (
           <div className="mb-6 bg-emerald-950/80 border border-emerald-500/50 text-emerald-200 px-4 py-3 rounded-2xl flex items-center justify-between shadow-lg">
@@ -439,10 +485,9 @@ export default function App() {
           <div className="space-y-8 animate-fadeIn">
             <div>
               <h2 className="text-2xl font-black text-white">Automation Command Center</h2>
-              <p className="text-sm text-slate-400">Monitoring authorized X accounts via OAuth 2.0 PKCE, applying FFmpeg branding overlays, and publishing to Facebook Page "Praja sanketam".</p>
+              <p className="text-sm text-slate-400">Monitoring authorized X accounts, applying FFmpeg branding overlays, and publishing to Facebook Page "Praja sanketam".</p>
             </div>
 
-            {/* Stats Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
               {[
                 { title: 'Connected X', value: `${stats.connectedAccounts} / ${stats.totalAccounts}`, max: 'Max 10', icon: Twitter, color: 'text-blue-400', bg: 'bg-blue-950/50 border-blue-900/50' },
@@ -468,10 +513,8 @@ export default function App() {
               })}
             </div>
 
-            {/* Quick Actions & Status Cards */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
-              {/* Target Page Status */}
               <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-4">
@@ -490,7 +533,7 @@ export default function App() {
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-slate-400">Meta Graph API:</span>
-                      <span className="font-mono text-xs text-blue-400">v19.0 OAuth</span>
+                      <span className="font-mono text-xs text-blue-400">v19.0 Active</span>
                     </div>
                   </div>
                 </div>
@@ -502,13 +545,12 @@ export default function App() {
                 </button>
               </div>
 
-              {/* X Accounts Connection Status */}
               <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
                       <Twitter className="w-5 h-5 text-sky-400" />
-                      X Account OAuth
+                      X Account Connection
                     </h3>
                     <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${stats.connectedAccounts > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
                       {stats.connectedAccounts} Connected
@@ -517,7 +559,7 @@ export default function App() {
                   <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2 mb-4">
                     <div className="flex justify-between text-sm">
                       <span className="text-slate-400">Auth Flow:</span>
-                      <span className="font-bold text-white">OAuth 2.0 PKCE</span>
+                      <span className="font-bold text-white">OAuth 2.0 PKCE / Sandbox</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-slate-400">Limit:</span>
@@ -533,7 +575,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Security & Ownership Check */}
               <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-4">
@@ -558,7 +599,6 @@ export default function App() {
               </div>
 
             </div>
-
           </div>
         )}
 
@@ -567,16 +607,16 @@ export default function App() {
           <div className="space-y-8 animate-fadeIn">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-black text-white">Monitored X Accounts (OAuth 2.0 PKCE)</h2>
-                <p className="text-sm text-slate-400">Connect up to 10 authorized X accounts securely via official X API OAuth 2.0.</p>
+                <h2 className="text-2xl font-black text-white">Monitored X Accounts</h2>
+                <p className="text-sm text-slate-400">Connect up to 10 authorized X accounts via official OAuth or Sandbox mode for instant testing.</p>
               </div>
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleConnectX}
-                  className="flex items-center gap-2 bg-sky-600 hover:bg-sky-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-lg cursor-pointer"
+                  className="flex items-center gap-2 bg-sky-600 hover:bg-sky-700 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition shadow-lg cursor-pointer"
                 >
                   <Twitter className="w-4 h-4" />
-                  Connect X Account
+                  Official X OAuth
                 </button>
                 <button
                   onClick={handleScanFeed}
@@ -589,7 +629,34 @@ export default function App() {
               </div>
             </div>
 
-            {/* Accounts Grid */}
+            {/* Sandbox Quick Connect Card to prevent login errors when client ID isn't configured */}
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl">
+              <h3 className="text-base font-bold text-white mb-3 flex items-center gap-2">
+                <Zap className="w-5 h-5 text-amber-400" />
+                Instant Sandbox / Demo Connect (Bypasses missing Client ID errors)
+              </h3>
+              <form onSubmit={handleDemoConnectX} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="sm:col-span-2">
+                  <input
+                    type="text"
+                    value={demoUsername}
+                    onChange={e => setDemoUsername(e.target.value)}
+                    placeholder="Enter X Username (e.g. PrajaSanketamNews)"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <button
+                    type="submit"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-sm transition shadow cursor-pointer"
+                  >
+                    Connect in Sandbox Mode
+                  </button>
+                </div>
+              </form>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {accounts.map(account => (
                 <div key={account.id} className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col justify-between">
@@ -721,15 +788,15 @@ export default function App() {
         {activeTab === 'facebook' && (
           <div className="space-y-8 animate-fadeIn">
             <div>
-              <h2 className="text-2xl font-black text-white">Facebook Page Integration (Meta OAuth)</h2>
-              <p className="text-sm text-slate-400">Connect securely to target page <strong className="text-white">Praja sanketam</strong> via official Meta Graph API OAuth.</p>
+              <h2 className="text-2xl font-black text-white">Facebook Page Integration</h2>
+              <p className="text-sm text-slate-400">Connect securely to target page <strong className="text-white">Praja sanketam</strong> via official Meta OAuth or Sandbox mode.</p>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               <div className="lg:col-span-2 bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-xl space-y-6">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
                   <Facebook className="w-5 h-5 text-blue-500" />
-                  Meta OAuth Page Connection
+                  Meta Page Connection Status
                 </h3>
 
                 <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
@@ -754,7 +821,14 @@ export default function App() {
                     onClick={handleConnectFacebook}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 py-3 rounded-xl text-sm transition shadow-lg cursor-pointer flex items-center gap-2"
                   >
-                    <Facebook className="w-4 h-4" /> Connect Facebook Page via Meta OAuth
+                    <Facebook className="w-4 h-4" /> Official Meta OAuth Connect
+                  </button>
+
+                  <button
+                    onClick={handleDemoConnectFacebook}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-3 rounded-xl text-sm transition shadow-lg cursor-pointer flex items-center gap-2"
+                  >
+                    <Zap className="w-4 h-4" /> Sandbox / Demo Connect Page
                   </button>
 
                   <button
@@ -762,7 +836,7 @@ export default function App() {
                     disabled={loading}
                     className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-5 py-3 rounded-xl text-sm transition cursor-pointer flex items-center gap-2"
                   >
-                    <ShieldCheck className="w-4 h-4 text-emerald-400" /> Test Facebook Connection
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" /> Test Connection
                   </button>
 
                   {settings.fb_connection_status === 'connected' && (
@@ -776,7 +850,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Status & Guide */}
               <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-xl flex flex-col justify-between">
                 <div>
                   <h3 className="text-lg font-bold text-white mb-4">Publishing Requirements</h3>
@@ -968,7 +1041,7 @@ export default function App() {
                       type="text"
                       name="x_client_id"
                       defaultValue={settings.x_client_id || ''}
-                      placeholder="X API Client ID"
+                      placeholder="X API Client ID (optional if using Sandbox Mode)"
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-500 font-mono"
                     />
                   </div>
@@ -979,7 +1052,7 @@ export default function App() {
                       type="text"
                       name="fb_client_id"
                       defaultValue={settings.fb_client_id || ''}
-                      placeholder="Meta App ID"
+                      placeholder="Meta App ID (optional if using Sandbox Mode)"
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-500 font-mono"
                     />
                   </div>
@@ -1053,7 +1126,7 @@ export default function App() {
             <span>•</span>
             <span>Max 10 Posts Daily</span>
             <span>•</span>
-            <span>Official OAuth 2.0 & Meta API</span>
+            <span>OAuth & Sandbox Mode Active</span>
           </div>
         </div>
       </footer>
