@@ -1,0 +1,9 @@
+[build]
+  command = "bun run build"
+  publish = "dist"
+
+[build.environment]
+  # better-sqlite3 is a native addon whose install script needs node-gyp.
+  # The build only bundles server.ts with dependencies marked external, so
+  # native install scripts are not needed on Netlify and are skipped here.
+  BUN_FLAGS = "--ignore-scripts"
